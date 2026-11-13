@@ -1,0 +1,57 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Python 3.10 (for Chaquopy)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Bundle offline KaTeX and marked.js into assets
+        run: |
+          mkdir -p app/src/main/assets/katex/contrib app/src/main/assets/katex/fonts
+          curl -fsSL https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js -o app/src/main/assets/marked.min.js
+          curl -fsSL https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css -o app/src/main/assets/katex/katex.min.css
+          curl -fsSL https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js -o app/src/main/assets/katex/katex.min.js
+          curl -fsSL https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js -o app/src/main/assets/katex/contrib/auto-render.min.js
+          for font in $(grep -oE 'fonts/[A-Za-z0-9_-]+\.woff2' app/src/main/assets/katex/katex.min.css | sort -u); do
+            curl -fsSL "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/$font" -o "app/src/main/assets/katex/$font"
+          done
+
+      - name: Accept Android SDK Licenses
+        run: |
+          if [ -d "$ANDROID_HOME/cmdline-tools/latest/bin" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          fi
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build Debug APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pgdp-math-solver-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
