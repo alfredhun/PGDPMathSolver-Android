@@ -84,7 +84,7 @@ class SolveViewModel(
     private val solveEngine: SolveEngine
 ) : ViewModel() {
 
-    private val _selectedMode = MutableStateFlow(SolveMode.HYBRID_TEXT_LLM)
+    private val _selectedMode = MutableStateFlow(SolveMode.LOCAL_ONLY)
     val selectedMode: StateFlow<SolveMode> = _selectedMode.asStateFlow()
 
     private val _uiState = MutableStateFlow<SolveUiState>(SolveUiState.Capturing)

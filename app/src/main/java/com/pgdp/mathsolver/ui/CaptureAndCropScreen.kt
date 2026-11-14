@@ -60,6 +60,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
@@ -343,8 +344,8 @@ fun ImageCropScreen(
     var currentBitmap by remember(bitmap) { mutableStateOf(bitmap) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
 
-    val defaultRect = remember { Rect(left = 0.08f, top = 0.22f, right = 0.92f, bottom = 0.72f) }
-    var cropRect by remember(bitmap) { mutableStateOf(defaultRect) }
+    val defaultRect = remember { Rect(left = 0.05f, top = 0.05f, right = 0.95f, bottom = 0.95f) }
+    var cropRect by remember(currentBitmap) { mutableStateOf(defaultRect) }
 
     Column(
         modifier = Modifier
@@ -395,9 +396,14 @@ fun ImageCropScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            if (containerSize.width > 0 && containerSize.height > 0) {
+            val displayedImageRect = remember(containerSize, currentBitmap) {
+                calculateDisplayedImageRect(containerSize, currentBitmap)
+            }
+
+            if (displayedImageRect.width > 0f && displayedImageRect.height > 0f) {
                 CropOverlayCanvas(
                     containerSize = containerSize,
+                    imageBounds = displayedImageRect,
                     cropRect = cropRect,
                     onCropRectChange = { cropRect = it }
                 )
@@ -476,89 +482,123 @@ fun SolveModeSegmentedBar(
 @Composable
 private fun CropOverlayCanvas(
     containerSize: IntSize,
+    imageBounds: Rect,
     cropRect: Rect,
     onCropRectChange: (Rect) -> Unit
 ) {
-    val w = containerSize.width.toFloat()
-    val h = containerSize.height.toFloat()
+    val currentCropRect by rememberUpdatedState(cropRect)
+    val currentOnChange by rememberUpdatedState(onCropRectChange)
     var activeHandle by remember { mutableStateOf<String?>(null) }
 
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(containerSize) {
+            .pointerInput(imageBounds) {
                 detectDragGestures(
                     onDragStart = { offset ->
-                        val nx = offset.x / w
-                        val ny = offset.y / h
-                        val tol = 0.08f
+                        val r = currentCropRect
+                        val bLeft = imageBounds.left + r.left * imageBounds.width
+                        val bTop = imageBounds.top + r.top * imageBounds.height
+                        val bRight = imageBounds.left + r.right * imageBounds.width
+                        val bBottom = imageBounds.top + r.bottom * imageBounds.height
+
+                        val touchRadius = 38.dp.toPx()
+                        val distTL = hypot(offset.x - bLeft, offset.y - bTop)
+                        val distTR = hypot(offset.x - bRight, offset.y - bTop)
+                        val distBL = hypot(offset.x - bLeft, offset.y - bBottom)
+                        val distBR = hypot(offset.x - bRight, offset.y - bBottom)
+
                         activeHandle = when {
-                            abs(nx - cropRect.left) < tol && abs(ny - cropRect.top) < tol -> "TL"
-                            abs(nx - cropRect.right) < tol && abs(ny - cropRect.top) < tol -> "TR"
-                            abs(nx - cropRect.left) < tol && abs(ny - cropRect.bottom) < tol -> "BL"
-                            abs(nx - cropRect.right) < tol && abs(ny - cropRect.bottom) < tol -> "BR"
-                            nx in cropRect.left..cropRect.right && ny in cropRect.top..cropRect.bottom -> "MOVE"
+                            distTL <= touchRadius -> "TL"
+                            distTR <= touchRadius -> "TR"
+                            distBL <= touchRadius -> "BL"
+                            distBR <= touchRadius -> "BR"
+                            abs(offset.y - bTop) <= touchRadius && offset.x in (bLeft - touchRadius)..(bRight + touchRadius) -> "TOP"
+                            abs(offset.y - bBottom) <= touchRadius && offset.x in (bLeft - touchRadius)..(bRight + touchRadius) -> "BOTTOM"
+                            abs(offset.x - bLeft) <= touchRadius && offset.y in (bTop - touchRadius)..(bBottom + touchRadius) -> "LEFT"
+                            abs(offset.x - bRight) <= touchRadius && offset.y in (bTop - touchRadius)..(bBottom + touchRadius) -> "RIGHT"
+                            offset.x in bLeft..bRight && offset.y in bTop..bBottom -> "MOVE"
                             else -> null
                         }
                     },
                     onDragEnd = { activeHandle = null },
+                    onDragCancel = { activeHandle = null },
                     onDrag = { change, dragAmount ->
                         change.consume()
-                        val dx = dragAmount.x / w
-                        val dy = dragAmount.y / h
-                        val minSize = 0.14f
-                        val updated = when (activeHandle) {
-                            "TL" -> cropRect.copy(
-                                left = (cropRect.left + dx).coerceIn(0f, cropRect.right - minSize),
-                                top = (cropRect.top + dy).coerceIn(0f, cropRect.bottom - minSize)
+                        val handle = activeHandle ?: return@detectDragGestures
+                        val dxNorm = dragAmount.x / imageBounds.width
+                        val dyNorm = dragAmount.y / imageBounds.height
+                        val minSize = 0.08f
+                        val r = currentCropRect
+
+                        val updated = when (handle) {
+                            "TL" -> r.copy(
+                                left = (r.left + dxNorm).coerceIn(0f, r.right - minSize),
+                                top = (r.top + dyNorm).coerceIn(0f, r.bottom - minSize)
                             )
-                            "TR" -> cropRect.copy(
-                                right = (cropRect.right + dx).coerceIn(cropRect.left + minSize, 1f),
-                                top = (cropRect.top + dy).coerceIn(0f, cropRect.bottom - minSize)
+                            "TR" -> r.copy(
+                                right = (r.right + dxNorm).coerceIn(r.left + minSize, 1f),
+                                top = (r.top + dyNorm).coerceIn(0f, r.bottom - minSize)
                             )
-                            "BL" -> cropRect.copy(
-                                left = (cropRect.left + dx).coerceIn(0f, cropRect.right - minSize),
-                                bottom = (cropRect.bottom + dy).coerceIn(cropRect.top + minSize, 1f)
+                            "BL" -> r.copy(
+                                left = (r.left + dxNorm).coerceIn(0f, r.right - minSize),
+                                bottom = (r.bottom + dyNorm).coerceIn(r.top + minSize, 1f)
                             )
-                            "BR" -> cropRect.copy(
-                                right = (cropRect.right + dx).coerceIn(cropRect.left + minSize, 1f),
-                                bottom = (cropRect.bottom + dy).coerceIn(cropRect.top + minSize, 1f)
+                            "BR" -> r.copy(
+                                right = (r.right + dxNorm).coerceIn(r.left + minSize, 1f),
+                                bottom = (r.bottom + dyNorm).coerceIn(r.top + minSize, 1f)
+                            )
+                            "TOP" -> r.copy(
+                                top = (r.top + dyNorm).coerceIn(0f, r.bottom - minSize)
+                            )
+                            "BOTTOM" -> r.copy(
+                                bottom = (r.bottom + dyNorm).coerceIn(r.top + minSize, 1f)
+                            )
+                            "LEFT" -> r.copy(
+                                left = (r.left + dxNorm).coerceIn(0f, r.right - minSize)
+                            )
+                            "RIGHT" -> r.copy(
+                                right = (r.right + dxNorm).coerceIn(r.left + minSize, 1f)
                             )
                             "MOVE" -> {
-                                val rw = cropRect.width
-                                val rh = cropRect.height
-                                val nl = (cropRect.left + dx).coerceIn(0f, 1f - rw)
-                                val nt = (cropRect.top + dy).coerceIn(0f, 1f - rh)
+                                val rw = r.width
+                                val rh = r.height
+                                val nl = (r.left + dxNorm).coerceIn(0f, 1f - rw)
+                                val nt = (r.top + dyNorm).coerceIn(0f, 1f - rh)
                                 Rect(nl, nt, nl + rw, nt + rh)
                             }
-                            else -> cropRect
+                            else -> r
                         }
-                        onCropRectChange(updated)
+                        currentOnChange(updated)
                     }
                 )
             }
     ) {
-        val left = cropRect.left * w
-        val top = cropRect.top * h
-        val right = cropRect.right * w
-        val bottom = cropRect.bottom * h
+        val totalW = containerSize.width.toFloat()
+        val totalH = containerSize.height.toFloat()
+
+        val left = imageBounds.left + cropRect.left * imageBounds.width
+        val top = imageBounds.top + cropRect.top * imageBounds.height
+        val right = imageBounds.left + cropRect.right * imageBounds.width
+        val bottom = imageBounds.top + cropRect.bottom * imageBounds.height
         val boxW = right - left
         val boxH = bottom - top
 
         val maskPath = Path().apply {
             fillType = PathFillType.EvenOdd
-            addRect(Rect(0f, 0f, w, h))
+            addRect(Rect(0f, 0f, totalW, totalH))
             addRect(Rect(left, top, right, bottom))
         }
-        drawPath(maskPath, color = Color.Black.copy(alpha = 0.6f))
+        drawPath(maskPath, color = Color.Black.copy(alpha = 0.62f))
 
         // 九宫格辅助线
-        val gridColor = Color.White.copy(alpha = 0.22f)
+        val gridColor = Color.White.copy(alpha = 0.28f)
         drawLine(gridColor, Offset(left + boxW / 3f, top), Offset(left + boxW / 3f, bottom), strokeWidth = 1.dp.toPx())
         drawLine(gridColor, Offset(left + 2 * boxW / 3f, top), Offset(left + 2 * boxW / 3f, bottom), strokeWidth = 1.dp.toPx())
         drawLine(gridColor, Offset(left, top + boxH / 3f), Offset(right, top + boxH / 3f), strokeWidth = 1.dp.toPx())
         drawLine(gridColor, Offset(left, top + 2 * boxH / 3f), Offset(right, top + 2 * boxH / 3f), strokeWidth = 1.dp.toPx())
 
+        // 边框
         drawRect(
             color = Color(0xFF8AB4F8),
             topLeft = Offset(left, top),
@@ -567,7 +607,7 @@ private fun CropOverlayCanvas(
         )
 
         // 四角粗 L 形手柄
-        val arm = 18.dp.toPx()
+        val arm = 22.dp.toPx()
         val stroke = 4.dp.toPx()
         val accent = Color.White
         // TL
@@ -582,7 +622,30 @@ private fun CropOverlayCanvas(
         // BR
         drawLine(accent, Offset(right - arm, bottom), Offset(right, bottom), stroke, StrokeCap.Round)
         drawLine(accent, Offset(right, bottom - arm), Offset(right, bottom), stroke, StrokeCap.Round)
+
+        // 四边中心拖拽小横/竖条指示手柄
+        val barLen = 24.dp.toPx()
+        val barStroke = 3.dp.toPx()
+        drawLine(accent, Offset(left + boxW / 2 - barLen / 2, top), Offset(left + boxW / 2 + barLen / 2, top), barStroke, StrokeCap.Round)
+        drawLine(accent, Offset(left + boxW / 2 - barLen / 2, bottom), Offset(left + boxW / 2 + barLen / 2, bottom), barStroke, StrokeCap.Round)
+        drawLine(accent, Offset(left, top + boxH / 2 - barLen / 2), Offset(left, top + boxH / 2 + barLen / 2), barStroke, StrokeCap.Round)
+        drawLine(accent, Offset(right, top + boxH / 2 - barLen / 2), Offset(right, top + boxH / 2 + barLen / 2), barStroke, StrokeCap.Round)
     }
+}
+
+private fun calculateDisplayedImageRect(containerSize: IntSize, bitmap: Bitmap): Rect {
+    if (containerSize.width <= 0 || containerSize.height <= 0 || bitmap.width <= 0 || bitmap.height <= 0) {
+        return Rect.Zero
+    }
+    val scale = min(
+        containerSize.width.toFloat() / bitmap.width.toFloat(),
+        containerSize.height.toFloat() / bitmap.height.toFloat()
+    )
+    val dispW = bitmap.width * scale
+    val dispH = bitmap.height * scale
+    val left = (containerSize.width - dispW) / 2f
+    val top = (containerSize.height - dispH) / 2f
+    return Rect(left, top, left + dispW, top + dispH)
 }
 
 private fun rotateBitmap90(source: Bitmap): Bitmap {

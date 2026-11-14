@@ -9,3 +9,5 @@
 .cxx
 local.properties
 *-apk/
+__pycache__/
+*.pyc
